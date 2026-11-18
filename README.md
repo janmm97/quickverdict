@@ -93,6 +93,13 @@ one request per question and ordering instead of one packed pass, and **the stat
 machine** if the backend is not local. Closed APIs that don't return logprobs (Claude, for example)
 can't be used: the method needs the model's probabilities, not its text.
 
+Limits of the remote backend:
+- Choice questions can have at most 26 options and Score questions at most 10 levels (each answer must be one token).
+- The model must reply with the bare key. Turn thinking/reasoning mode off, or quickverdict answers 502.
+- `--device`, `--dtype`, `--load-in-4bit`, `--chunk-tokens` and `--compile` are ignored.
+- The install still needs `torch` for now.
+- Backend failures (unreachable, 401, 5xx, no logprobs) return **502**. `--concurrency` caps the calls in flight across all requests.
+
 ### Options
 
 | Flag / env var | Default | What it does |

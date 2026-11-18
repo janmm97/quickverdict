@@ -19,7 +19,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("serve", help="serve POST /v1/systemone and GET /v1/models")
     s.add_argument("--model", default=os.environ.get("QUICKVERDICT_MODEL", DEFAULT_MODEL),
-                   help="Hugging Face model id or local path (env QUICKVERDICT_MODEL)")
+                   help="Hugging Face model id or local path (env QUICKVERDICT_MODEL); with --api-base, "
+                        "the backend's own model name")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--device", default=None, help="cuda, cpu, ... (default: cuda if available)")
@@ -50,15 +51,19 @@ def main(argv=None):
 
         from .remote import RemoteEngine
 
-        host = urlparse(a.api_base).hostname
-        if host not in ("127.0.0.1", "localhost", "::1"):
-            print(f"note: every state you send is forwarded to {host}", file=sys.stderr)
         try:
             engine = RemoteEngine(a.api_base, a.model, api_key=os.environ.get("QUICKVERDICT_BACKEND_API_KEY"),
                                   permutations=a.permutations, temperature=a.temperature,
                                   concurrency=a.concurrency)
         except ValueError as e:
             p.error(str(e))
+        host = urlparse(a.api_base).hostname
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            print(f"note: every state you send is forwarded to {host}", file=sys.stderr)
+        local = [f for f in ("device", "dtype", "load_in_4bit", "compile") if getattr(a, f)]
+        if local or a.chunk_tokens != 2048:
+            print("note: --device, --dtype, --load-in-4bit, --chunk-tokens and --compile are ignored "
+                  "with --api-base", file=sys.stderr)
     else:
         from .engine import Engine
 

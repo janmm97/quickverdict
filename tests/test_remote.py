@@ -65,8 +65,19 @@ def test_system_one_remote_matches_local_shape():
 
 
 def test_rejects_non_http_base():
-    with pytest.raises(ValueError):
-        RemoteEngine("file:///etc/passwd", "m")
+    for bad in ("file:///etc/passwd", "http:///v1"):
+        with pytest.raises(ValueError):
+            RemoteEngine(bad, "m")
+
+
+def test_backend_failure_is_502(backend):
+    from fastapi.testclient import TestClient
+
+    from quickverdict.server import create_app
+
+    c = TestClient(create_app(RemoteEngine(backend, "m")))
+    r = c.post("/v1/systemone", json={"model": "m", "state": "s", "questions": {"q": {"type": "noul"}}})
+    assert r.status_code == 502 and r.json()["detail"] == "backend returned 401"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -107,3 +118,43 @@ def test_http_errors_become_request_errors(backend):
         RemoteEngine(backend + "redir", "m", api_key="k").system_one("s", q)
     with pytest.raises(RequestError, match="unreachable"):
         RemoteEngine("http://127.0.0.1:9/v1", "m", timeout=2).system_one("s", q)
+
+
+def test_key_logprobs_rejects_reply_without_any_key():
+    with pytest.raises(RequestError, match="not an answer key"):
+        key_logprobs(lp(The=0.9, I=0.05), ["A", "B"])
+    with pytest.raises(RequestError):
+        key_logprobs([], ["A", "B"])
+
+
+def test_rejects_multi_token_keys():
+    q = SystemOneRequest.model_validate({"model": "m", "state": "s", "questions": {
+        "c": {"type": "choice", "criteria": {f"o{i}": None for i in range(27)}}}}).questions
+    with pytest.raises(RequestError, match="<= 26"):
+        Fake().system_one("s", q)
+
+
+def test_non_json_and_dropped_connection_are_request_errors():
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            if "bad" in self.path:
+                self.send_response(200)
+                self.send_header("Content-Length", "10")
+                self.end_headers()
+                self.wfile.write(b"<html>oops")
+            else:
+                self.connection.close()
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    q = SystemOneRequest.model_validate({"model": "m", "state": "s", "questions": {"q": {"type": "noul"}}}).questions
+    try:
+        for path, msg in (("bad", "not return JSON"), ("drop", "unreachable")):
+            with pytest.raises(RequestError, match=msg):
+                RemoteEngine(f"http://127.0.0.1:{srv.server_port}/{path}", "m").system_one("s", q)
+    finally:
+        srv.shutdown()

@@ -22,6 +22,14 @@ _S, _Q = "\x00QV_STATE\x00", "\x00QV_QUESTION\x00"
 class RequestError(ValueError):
     """A request the engine can't serve (maps to HTTP 400)."""
 
+    status = 400
+
+
+class BackendError(RequestError):
+    """The remote backend failed (maps to HTTP 502, so SDK clients can retry)."""
+
+    status = 502
+
 
 def text_of(content) -> str:
     if content is None:
