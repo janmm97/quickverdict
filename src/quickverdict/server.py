@@ -59,7 +59,7 @@ def create_app(engine: Engine, api_key: str | None = None) -> FastAPI:
         return not hmac.compare_digest(sent.encode(), f"Bearer {api_key}".encode())
 
     @app.get("/v1/models")
-    def models(request: Request):
+    async def models(request: Request):  # async: never queues behind GPU work in the threadpool
         if unauthorized(request):
             return _err(401, "invalid API key")
         return {"models": [{"name": engine.model_id, "release_date": RELEASE_DATE,
@@ -69,9 +69,12 @@ def create_app(engine: Engine, api_key: str | None = None) -> FastAPI:
     async def system_one(request: Request):
         if unauthorized(request):
             return _err(401, "invalid API key")
-        body = await request.body()
-        if len(body) > MAX_BODY:
-            return _err(413, "request body exceeds 32 MiB")
+        body = bytearray()
+        async for chunk in request.stream():  # stop reading at the cap instead of buffering everything
+            body += chunk
+            if len(body) > MAX_BODY:
+                return _err(413, "request body exceeds 32 MiB")
+        body = bytes(body)
         encoding = request.headers.get("content-encoding", "").strip().lower()
         if encoding not in ("", "identity", "gzip", "zstd"):
             return _err(415, f"unsupported Content-Encoding: {encoding}")
@@ -86,9 +89,12 @@ def create_app(engine: Engine, api_key: str | None = None) -> FastAPI:
             return _err(400, "body must be UTF-8 JSON without a BOM")
         try:
             raw = json.loads(body.decode("utf-8"), parse_constant=_reject_constant)
+            too_deep = _depth(raw) > MAX_DEPTH
+        except RecursionError:  # ~1,000 levels: deeper than the parser or _depth can go
+            too_deep = True
         except (UnicodeDecodeError, ValueError) as e:
             return _err(400, f"invalid JSON body: {e}"[:500])
-        if _depth(raw) > MAX_DEPTH:
+        if too_deep:
             return _err(400, f"JSON nesting exceeds {MAX_DEPTH} levels")
         try:
             req = SystemOneRequest.model_validate(raw)

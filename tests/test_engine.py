@@ -36,7 +36,8 @@ def naive_scores(engine, prefix, items):
     return out
 
 
-@pytest.mark.parametrize("chunk", [10**6, 1])  # one packed pass / one pass per item over the cached state
+# one packed pass / long-state prefill, then one pass per item / whichever mix 120 tokens gives
+@pytest.mark.parametrize("chunk", [10**6, 1, 120])
 def test_packed_matches_naive(engine, chunk):
     r = req()
     prefix = engine._ids(engine._pre + r.state + engine._mid)
