@@ -120,6 +120,8 @@ class Engine:
     # state and every question (and every multi-token candidate) into ONE sequence and let a 4D
     # attention mask keep them independent: each question sees the state and itself, each candidate
     # sees the state, its question and itself. One forward pass answers the whole request.
+    # A state longer than chunk_tokens is prefilled first with plain causal passes instead, so the
+    # mask never grows with the square of the state (a 4 GB GPU would run out of memory).
     def _segments(self, it: _Item):
         """Segments [(tokens, parent)] and wanted log-probs [(seg, row, token, cand)] for one item."""
         last = len(it.suffix) - 1
@@ -178,11 +180,23 @@ class Engine:
             out += lp.tolist()
         return [(k, ci, v) for (k, ci), v in zip(owners, out)]
 
+    @torch.inference_mode()
+    def _prefill(self, cache: DynamicCache, prefix: list[int]) -> None:
+        """Plain causal forward over a long state, chunk by chunk: memory stays linear in its length."""
+        step = max(1, self.chunk_tokens)
+        for s in range(0, len(prefix), step):
+            self.body(input_ids=torch.tensor([prefix[s:s + step]], device=self.device),
+                      past_key_values=cache, use_cache=True)
+
     # ---- public API ------------------------------------------------------------------------
     def system_one(self, state, questions: dict) -> dict:
         """Answer `questions` (schema models) about `state`. Returns {"answers": ..., "usage": ...}."""
         with self.lock:
-            return self._answer(state, questions)
+            try:
+                return self._answer(state, questions)
+            except torch.cuda.OutOfMemoryError as e:
+                torch.cuda.empty_cache()
+                raise RequestError("out of GPU memory: shorten the state or lower --chunk-tokens") from e
 
     def _items(self, questions: dict) -> list[_Item]:
         items: list[_Item] = []
@@ -210,7 +224,10 @@ class Engine:
         planned = [self._segments(it) for it in items]
         sizes = [sum(len(t) for t, _ in segs) for segs, _ in planned]
         scores: list[list[float]] = [[0.0] * len(it.cands) for it in items]
-        cache, i, first = DynamicCache(), 0, True
+        cache, i = DynamicCache(), 0
+        first = plen <= self.chunk_tokens  # short state: pack it into the first pass (saves a forward)
+        if not first:
+            self._prefill(cache, prefix)
         while i < len(items):  # pack items into passes of <= chunk_tokens new tokens
             group, size = [], plen if first else 0
             while i < len(items) and (not group or size + sizes[i] <= self.chunk_tokens):
@@ -221,7 +238,7 @@ class Engine:
                 scores[group[k]][ci] += v
             first = False
             if i < len(items):  # keep only the state's keys/values for the next pass
-                cache.crop(plen - cache.get_seq_length())
+                cache.crop(plen)
         return scores, plen + sum(sizes)
 
     def _answer(self, state, questions: dict) -> dict:
