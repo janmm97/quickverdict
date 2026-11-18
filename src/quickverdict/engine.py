@@ -74,6 +74,55 @@ def noul_prompt(q: Noul) -> str:
     return "\n".join(lines)
 
 
+def plan(questions: dict, permutations: int) -> list[tuple[str, str, list[str], list]]:
+    """One item per (question, option ordering): (qid, prompt, answer keys, option behind each key)."""
+    out = []
+    for qid, q in questions.items():
+        if isinstance(q, Choice):
+            labels = list(q.criteria)
+            n = len(labels)
+            keys = list(string.ascii_uppercase[:n]) if n <= 26 else [str(i + 1) for i in range(n)]
+            for order in _orderings(n, permutations):
+                shown = [labels[j] for j in order]
+                out.append((qid, choice_prompt(q, shown, keys), keys, shown))
+        elif isinstance(q, Score):
+            n = len(q.criteria)
+            out.append((qid, score_prompt(q), [str(i) for i in range(n)], list(range(n))))
+        elif isinstance(q, Noul):
+            out.append((qid, noul_prompt(q), ["Yes", "No"], [True, False]))
+        else:
+            raise RequestError(f"question '{qid}': type '{q.type}' is not supported by quickverdict yet")
+    return out
+
+
+def aggregate(questions: dict, items: list, scores: list[list[float]], temperature: float) -> dict:
+    """Restricted softmax per item over its key log-likelihoods, then average each question's orderings.
+    `items` = [(qid, options)] aligned with `scores`."""
+    probs_by_q: dict[str, dict] = {}
+    for (qid, options), sc in zip(items, scores):
+        p = torch.softmax(torch.tensor(sc) / temperature, dim=0).tolist()
+        acc = probs_by_q.setdefault(qid, {})
+        for opt, pv in zip(options, p):
+            acc.setdefault(opt, []).append(pv)
+
+    answers = {}
+    for qid, q in questions.items():
+        acc = probs_by_q[qid]
+        if isinstance(q, Choice):
+            probs = {label: sum(acc[label]) / len(acc[label]) for label in q.criteria}
+            answers[qid] = {"type": "choice", "choice": max(probs, key=probs.get),
+                            "confidence": choice_confidence(list(probs.values())), "probabilities": probs}
+        elif isinstance(q, Score):
+            p = [acc[i][0] for i in range(len(q.criteria))]
+            answers[qid] = {"type": "score", "score": sum(i * v for i, v in enumerate(p)),
+                            "confidence": score_confidence(p),
+                            "legend": {str(i): text_of(c) for i, c in enumerate(q.criteria)},
+                            "probabilities": {str(i): v for i, v in enumerate(p)}}
+        else:
+            answers[qid] = {"type": "noul", "noul": acc[True][0]}
+    return answers
+
+
 class Engine:
     def __init__(self, model_id: str, device: str | None = None, dtype: str | None = None,
                  permutations: int = 3, temperature: float = 1.0, chunk_tokens: int = 2048,
@@ -108,9 +157,6 @@ class Engine:
             self._bos = False
         else:  # base models, or templates that rewrite the user turn: plain format
             self._pre, self._mid, self._post, self._bos = f"{SYSTEM}\n\nState:\n", "\n\n", "\nAnswer: ", True
-        self._letters = [self._ids(c) for c in string.ascii_uppercase]
-        self._digits = [self._ids(str(d)) for d in range(10)]
-        self._yes_no = [self._ids("Yes"), self._ids("No")]
 
     def _ids(self, text: str, special: bool = False) -> list[int]:
         return self.tok(text, add_special_tokens=special)["input_ids"]
@@ -199,24 +245,8 @@ class Engine:
                 raise RequestError("out of GPU memory: shorten the state or lower --chunk-tokens") from e
 
     def _items(self, questions: dict) -> list[_Item]:
-        items: list[_Item] = []
-        for qid, q in questions.items():
-            if isinstance(q, Choice):
-                labels = list(q.criteria)
-                n = len(labels)
-                keys = list(string.ascii_uppercase[:n]) if n <= 26 else [str(i + 1) for i in range(n)]
-                cands = self._letters[:n] if n <= 26 else [self._ids(k) for k in keys]
-                for order in _orderings(n, self.permutations):
-                    shown = [labels[j] for j in order]
-                    items.append(_Item(qid, self._ids(choice_prompt(q, shown, keys) + self._post), cands, shown))
-            elif isinstance(q, Score):
-                n = len(q.criteria)
-                items.append(_Item(qid, self._ids(score_prompt(q) + self._post), self._digits[:n], list(range(n))))
-            elif isinstance(q, Noul):
-                items.append(_Item(qid, self._ids(noul_prompt(q) + self._post), self._yes_no, [True, False]))
-            else:
-                raise RequestError(f"question '{qid}': type '{q.type}' is not supported by quickverdict yet")
-        return items
+        return [_Item(qid, self._ids(prompt + self._post), [self._ids(k) for k in keys], options)
+                for qid, prompt, keys, options in plan(questions, self.permutations)]
 
     def _scores(self, prefix: list[int], items: list[_Item]) -> tuple[list[list[float]], int]:
         """Log-likelihood of every candidate key of every item, and the tokens processed."""
@@ -248,28 +278,5 @@ class Engine:
         if longest > self.max_len:
             raise RequestError(f"max_tokens_exceeded: {longest} tokens > {self.max_len} for model {self.model_id}")
         scores, used = self._scores(prefix, items)
-
-        # restricted softmax per item, then average the orderings of each question
-        probs_by_q: dict[str, dict] = {}
-        for it, sc in zip(items, scores):
-            p = torch.softmax(torch.tensor(sc) / self.temperature, dim=0).tolist()
-            acc = probs_by_q.setdefault(it.qid, {})
-            for opt, pv in zip(it.options, p):
-                acc.setdefault(opt, []).append(pv)
-
-        answers = {}
-        for qid, q in questions.items():
-            acc = probs_by_q[qid]
-            if isinstance(q, Choice):
-                probs = {label: sum(acc[label]) / len(acc[label]) for label in q.criteria}
-                answers[qid] = {"type": "choice", "choice": max(probs, key=probs.get),
-                                "confidence": choice_confidence(list(probs.values())), "probabilities": probs}
-            elif isinstance(q, Score):
-                p = [acc[i][0] for i in range(len(q.criteria))]
-                answers[qid] = {"type": "score", "score": sum(i * v for i, v in enumerate(p)),
-                                "confidence": score_confidence(p),
-                                "legend": {str(i): text_of(c) for i, c in enumerate(q.criteria)},
-                                "probabilities": {str(i): v for i, v in enumerate(p)}}
-            else:
-                answers[qid] = {"type": "noul", "noul": acc[True][0]}
+        answers = aggregate(questions, [(it.qid, it.options) for it in items], scores, self.temperature)
         return {"answers": answers, "usage": {"input_tokens": used, "output_tokens": 0}}

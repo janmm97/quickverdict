@@ -74,6 +74,25 @@ qs = SystemOneRequest.model_validate({"model": "m", "state": "", "questions": {
 print(engine.system_one("My card was charged twice.", qs)["answers"])
 ```
 
+### Bigger models on another machine (remote backend)
+
+quickverdict can score with any OpenAI-compatible server that returns `logprobs` instead of loading a model
+itself. Use it to run a 32B or 70B model on a stronger box (vLLM, llama.cpp `llama-server`, Ollama,
+SGLang, LM Studio) or with a hosted open-model provider that supports logprobs:
+
+```bash
+# e.g. vLLM on a 2x RTX 5090 machine: vllm serve Qwen/Qwen2.5-72B-Instruct-AWQ --tensor-parallel-size 2
+quickverdict serve --api-base http://gpu-box:8000/v1 --model Qwen/Qwen2.5-72B-Instruct-AWQ
+# hosted provider: put its key in the environment, never on the command line
+export QUICKVERDICT_BACKEND_API_KEY=...
+```
+
+Same prompts, same answer shapes. Each option's probability comes from the backend's first-token
+`top_logprobs` (top 20). Answers stay deterministic when the backend is (temperature 0). The trade-offs:
+one request per question and ordering instead of one packed pass, and **the state leaves your
+machine** if the backend is not local. Closed APIs that don't return logprobs (Claude, for example)
+can't be used: the method needs the model's probabilities, not its text.
+
 ### Options
 
 | Flag / env var | Default | What it does |
@@ -87,6 +106,9 @@ print(engine.system_one("My card was charged twice.", qs)["answers"])
 | `--chunk-tokens` | `2048` | Max new tokens per forward pass. Lower it if a long state runs out of GPU memory |
 | `--load-in-4bit` | off | nf4 weights, about 4x less VRAM (`pip install -e ".[4bit]"`) |
 | `--compile` | off | `torch.compile`: faster calls, slow first request |
+| `--api-base` / `QUICKVERDICT_API_BASE` | empty | Score with an OpenAI-compatible server instead of a local model; `--model` is then its model name |
+| `QUICKVERDICT_BACKEND_API_KEY` | empty | Bearer key sent to `--api-base` |
+| `--concurrency` | `8` | Parallel requests to `--api-base` |
 
 See `.env.example` for the variables. quickverdict reads them from the environment and does not load
 `.env` itself. Never commit a real `.env`.
@@ -101,6 +123,7 @@ See `.env.example` for the variables. quickverdict reads them from the environme
 | gzip / zstd request bodies | yes | yes |
 | Box questions and images | no (roadmap) | yes |
 | Hosted service, rate limits | no, local only (optional bearer key) | yes |
+| Remote model backend (OpenAI-compatible, logprobs) | yes, opt-in (`--api-base`) | n/a |
 
 ## How it works
 
