@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Secrets and local config (keep .env.example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
+# Model weights and large binaries
+*.safetensors
+*.bin
+*.gguf
+*.pt
+*.onnx
+
+# Benchmark data and outputs
+bench/.cache/
+bench/out/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
