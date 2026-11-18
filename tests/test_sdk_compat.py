@@ -20,7 +20,9 @@ def base_url(engine):
     server = uvicorn.Server(uvicorn.Config(create_app(engine), host="127.0.0.1", port=port, log_level="warning"))
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
+    deadline = time.monotonic() + 60
     while not server.started:
+        assert t.is_alive() and time.monotonic() < deadline, "uvicorn did not start"
         time.sleep(0.05)
     yield f"http://127.0.0.1:{port}"
     server.should_exit = True
