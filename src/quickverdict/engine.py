@@ -238,7 +238,7 @@ class Engine:
                 scores[group[k]][ci] += v
             first = False
             if i < len(items):  # keep only the state's keys/values for the next pass
-                cache.crop(plen)
+                cache.crop(plen - cache.get_seq_length())  # negative: transformers 5 rejects a positive crop
         return scores, plen + sum(sizes)
 
     def _answer(self, state, questions: dict) -> dict:
