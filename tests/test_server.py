@@ -76,6 +76,8 @@ def test_bombs_and_limits(client):
     assert post(client, b"{}", {"Content-Encoding": "br"}).status_code == 415
     deep = {"model": "m", "state": json.loads("[" * 70 + "]" * 70), "questions": BODY["questions"]}
     assert post(client, deep).status_code == 400
+    assert post(client, b"[" * 100_000 + b"]" * 100_000).status_code == 400  # RecursionError, not 500
+    assert post(client, b" " * (MAX_BODY + 1)).status_code == 413
 
 
 @pytest.mark.parametrize("raw", [b"\xef\xbb\xbf{}", b"{", b'{"model":"m","state":NaN,"questions":{}}', b"\xff"])
