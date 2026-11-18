@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Remote backend (`--api-base`): score with any OpenAI-compatible server that returns logprobs
+  (vLLM, llama.cpp, Ollama, SGLang, LM Studio, hosted open-model providers), so bigger models on
+  another machine can serve the same API. Opt-in; key via `QUICKVERDICT_BACKEND_API_KEY`.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added

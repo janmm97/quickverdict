@@ -108,7 +108,7 @@ def create_app(engine: Engine, api_key: str | None = None) -> FastAPI:
             # sync GPU work runs in the threadpool so the event loop stays free
             result = await run_in_threadpool(engine.system_one, req.state, req.questions)
         except RequestError as e:
-            return _err(400, str(e))
+            return _err(e.status, str(e))
         return JSONResponse({"model": engine.model_id, **result},
                             headers={"x-typesafe-request-id": uuid.uuid4().hex})
 
