@@ -83,11 +83,13 @@ print(engine.system_one("My card was charged twice.", qs)["answers"])
 | `--host`, `--port` | `127.0.0.1`, `8000` | Where to listen. Keep it on localhost unless you set an API key |
 | `--device`, `--dtype` | `cuda` if available, fp16 on GPU | Where and how to run the model |
 | `--permutations` | `3` | Option orderings averaged per Choice (1 = off) |
-| `--temperature` | `1.0` | Calibration temperature |
+| `--temperature` | `1.0` | Calibration temperature (must be > 0) |
+| `--chunk-tokens` | `2048` | Max new tokens per forward pass. Lower it if a long state runs out of GPU memory |
 | `--load-in-4bit` | off | nf4 weights, about 4x less VRAM (`pip install -e ".[4bit]"`) |
 | `--compile` | off | `torch.compile`: faster calls, slow first request |
 
-See `.env.example`. Never commit a real `.env`.
+See `.env.example` for the variables. quickverdict reads them from the environment and does not load
+`.env` itself. Never commit a real `.env`.
 
 ## What it supports
 
@@ -98,7 +100,7 @@ See `.env.example`. Never commit a real `.env`.
 | Same answer shapes, confidence formulas and `{"detail": ...}` errors | yes | yes |
 | gzip / zstd request bodies | yes | yes |
 | Box questions and images | no (roadmap) | yes |
-| Hosted, auth, rate limits | no, local only | yes |
+| Hosted service, rate limits | no, local only (optional bearer key) | yes |
 
 ## How it works
 
@@ -129,8 +131,11 @@ Qwen3-1.7B scored 0% / 12.5% / 50% at 517 ms median on the same run.
 
 | | All options | Avg post, least stable option | Worst post | Posts above 1 in 10 | Median latency per call |
 |---|---|---|---|---|---|
-| quickverdict, Qwen2.5-1.5B | **0%** | **0%** | **0%** | 0 / 40 | 996 ms (p90 1,037 ms) |
+| quickverdict, Qwen2.5-1.5B | 0% | 0% | 0% | 0 / 40 | 996 ms (p90 1,037 ms) |
 | Jev 1.14 (published) | 1.0% | 4.0% | 6.7% | 0 / 40 | ~103 ms |
+
+quickverdict's 0% is by design: nothing is sampled, so the same request always returns the same
+probabilities. It shows reproducibility, not better judgement.
 
 What this means: quickverdict is fully reproducible and beats BM25 alone, but on this hardware a
 1.5B model is well behind Jev on accuracy and about 4 to 10 times slower per call. Larger models and
