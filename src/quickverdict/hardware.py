@@ -7,16 +7,19 @@ import torch
 GIB = 1024**3
 
 # Best first. Apache-2.0 Qwen2.5 Instruct models only (3B and 72B have other licences).
-# GiB = weights in memory: bf16 is 2 bytes/param; nf4 keeps embeddings and the head in bf16.
+# GiB = weights in memory: bf16 is 2 bytes/param; nf4 is 0.5625 bytes/param (4 bits + a float32 scale per 64
+# weights, measured with bitsandbytes 0.50) and keeps embeddings and the head in bf16.
 TIERS = [
     ("Qwen/Qwen2.5-32B-Instruct", False, 61.0),
-    ("Qwen/Qwen2.5-32B-Instruct", True, 18.3),
+    ("Qwen/Qwen2.5-32B-Instruct", True, 19.2),
     ("Qwen/Qwen2.5-14B-Instruct", False, 27.4),
-    ("Qwen/Qwen2.5-14B-Instruct", True, 9.4),
+    ("Qwen/Qwen2.5-14B-Instruct", True, 9.8),
     ("Qwen/Qwen2.5-7B-Instruct", False, 14.2),
-    ("Qwen/Qwen2.5-7B-Instruct", True, 5.3),
+    ("Qwen/Qwen2.5-7B-Instruct", True, 5.5),
 ]
 SMALLEST = "Qwen/Qwen2.5-1.5B-Instruct"  # 2.9 GiB in bf16; also the CPU default
+DOWNLOAD_GB = {"Qwen/Qwen2.5-1.5B-Instruct": 3, "Qwen/Qwen2.5-7B-Instruct": 15, "Qwen/Qwen2.5-14B-Instruct": 30,
+               "Qwen/Qwen2.5-32B-Instruct": 66}  # first-run download (bf16 safetensors), so it is no surprise
 
 
 def pick_model(vram_gib: float, can_4bit: bool) -> tuple[str, bool]:
@@ -60,6 +63,7 @@ def auto_model(device: str | None = None) -> tuple[str, str, bool, str]:
     """(model id, device, load in 4-bit, one-line explanation) for `--model auto`."""
     dev, gib, name = detect(device)
     if dev == "cpu" or gib == 0:
-        return SMALLEST, dev, False, f"auto: {name}, using {SMALLEST}"
+        return SMALLEST, dev, False, f"auto: {name}, using {SMALLEST} (first run downloads ~{DOWNLOAD_GB[SMALLEST]} GB)"
     model, nf4 = pick_model(gib, can_load_4bit(dev))
-    return model, dev, nf4, f"auto: {name} ({gib:.0f} GiB), using {model}" + (" in 4-bit" if nf4 else "")
+    return (model, dev, nf4, f"auto: {name} ({gib:.0f} GiB), using {model}" + (" in 4-bit" if nf4 else "")
+            + f" (first run downloads ~{DOWNLOAD_GB[model]} GB)")
