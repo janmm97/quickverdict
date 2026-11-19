@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Documentation
+- README: badges, clearer opening (LLM classifier server, Yes/No (Noul)), "How quickverdict compares" table (sources checked 2026-11-20) and an FAQ.
+
 ### Added
 - Remote backend (`--api-base`): score with any OpenAI-compatible server that returns logprobs
   (vLLM, llama.cpp, Ollama, SGLang, LM Studio, hosted open-model providers), so bigger models on
