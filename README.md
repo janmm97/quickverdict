@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/janmm97/quickverdict/actions/workflows/ci.yml/badge.svg)](https://github.com/janmm97/quickverdict/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
 
-quickverdict is a local, open-source LLM classifier server. Ask a small language model on your own GPU Choice, Score or Yes/No questions and get **calibrated probabilities** back, through an API that is wire-compatible with [TypeSafe's System One (Jev)](https://docs.typesafe.ai/introduction). Yes/No questions are called Noul in TypeSafe's SDK.
+quickverdict is a local, open-source LLM classifier server. Ask a small language model on your own GPU Choice, Score or Yes/No questions and get **calibrated probabilities** back, through an API that is wire-compatible with [TypeSafe's System One (Jev)](https://docs.typesafe.ai/introduction). Yes/No (true-or-false) questions are called Noul in TypeSafe's SDK.
 
-**Good for:** ticket triage (the usage example below) and re-ranking search results (the CLERC legal re-ranking benchmark below).
+**Good for:** ticket triage and other label decisions you want to keep on your own machine (the usage example below). It also re-ranks search results; the CLERC benchmark below shows the 1.5B model still trails Jev there.
 
 - **Local and private:** your data never leaves the machine. No API key, no per-call bill.
 - **Deterministic:** the same request always gives the same probabilities (0% run-to-run change).
@@ -176,17 +176,16 @@ restricted to the allowed labels (multi-token labels are scored by sequence log-
 Choice questions are scored under several cyclic option orderings and averaged to cancel position bias.
 
 ## How quickverdict compares
-What each tool does, from each project's own documentation. Checked 2026-11-20. "Not stated" means the page I read does not say; the tool may still do it.
+What each tool does, from each project's own documentation. Checked 2026-11-20. "Not stated" means the pages checked do not say; the tool may still do it.
 
 | Tool | What it does | Returns probabilities for your labels? |
 |---|---|---|
-| quickverdict v0.1 | Asks a local model Choice, Score or Yes/No (Noul) questions; no text is generated | Yes, from the model's first-token logits; same request, same probabilities; Choice averaged over several option orderings |
+| quickverdict v0.1 | Asks a local model Choice, Score or Yes/No (Noul) questions; no text is generated | Yes, from the model's next-token logits over your labels (sequence log-likelihood for multi-token labels); same request, same probabilities; Choice averaged over several option orderings |
 | TypeSafe Jev (System One) | TypeSafe's first System One model: "evaluates typed questions against a state and returns structured results directly. No text generation, no parsing" | Yes: probability distributions for Choice and Score, plus `confidence` |
 | vLLM structured outputs | The `choice` option makes the output "exactly one of the choices" | Not stated on the page read |
 | Outlines | Constrains generation with JSON Schema, regular expressions or grammars; lists a multiple-choice output type | Not checked |
 | Hugging Face zero-shot classification pipeline | Uses an NLI model: each label becomes a hypothesis and the entailment logit scores it | Yes: `scores`, normalised to sum to 1 when `multi_label=False` |
 | DeepEval (LLM-as-a-judge metrics) | Evaluation framework that runs in Pytest; its quickstart uses an LLM as the judge (OpenAI key in the example, "or configure any other LLM") | Not checked |
-| Cross-encoder rerankers | Not checked | Not checked |
 
 How quickverdict differs from a judge library: it does not grade generated text. It scores labels you supply (a list of options, a score scale, or Yes/No) with a local model's next-token logits. Libraries such as DeepEval use an LLM as a judge inside their evaluation metrics.
 
@@ -246,7 +245,7 @@ No. quickverdict does not replace Jev. On a 4 GB laptop GPU with a 1.5B model, q
 quickverdict recommends a GPU (NVIDIA, AMD, Apple Silicon or Intel Arc) and runs slowly on CPU; it was measured only on an RTX 3050 Laptop, 4 GB. With `--model auto` it reads your GPU memory at start-up and loads the biggest model that fits: on NVIDIA, Qwen2.5-1.5B under 7 GB, 7B (4-bit) at 7–11 GB, 14B (4-bit) at 12–21 GB, 32B (4-bit) from 23 GB; other GPUs use bf16 and need more memory. Pass `--model` to pick any Hugging Face causal LM.
 
 ### Are quickverdict's probabilities deterministic and calibrated?
-Deterministic, yes: the same request always returns the same probabilities because nothing is sampled. In the self-consistency test (40 posts sent 15 times each, Qwen2.5-1.5B, RTX 3050 Laptop, measured 2026-11-19) run-to-run change was 0%. That shows reproducibility, not better judgement. Probabilities come from next-token logits over the allowed labels, with a calibration temperature (`--temperature`, default 1.0). The README reports no separate calibration measurement.
+Deterministic, yes: with the local backend the same request always returns the same probabilities because nothing is sampled. In the self-consistency test (40 posts sent 15 times each, Qwen2.5-1.5B, RTX 3050 Laptop, measured 2026-11-19) run-to-run change was 0%. That shows reproducibility, not better judgement. Probabilities come from next-token logits over the allowed labels, with a calibration temperature (`--temperature`, default 1.0). The README reports no separate calibration measurement.
 
 ### Can I use quickverdict with vLLM, Ollama, llama.cpp or Claude?
 Yes for any OpenAI-compatible server that returns `logprobs`, set with `--api-base`: vLLM, llama.cpp `llama-server`, Ollama, SGLang and LM Studio are listed, as are hosted providers that support logprobs. No for APIs that do not return logprobs, such as Claude, because quickverdict needs the model's probabilities, not its text. If the backend is not local, the state leaves your machine.
