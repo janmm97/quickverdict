@@ -145,7 +145,8 @@ def default_device() -> str:
 def default_dtype(device: str) -> torch.dtype:
     """bf16 where the GPU has it (newer models overflow in fp16), else fp16 on GPUs, fp32 on CPU."""
     if device.startswith("cuda") or device == "auto":
-        return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        # no emulation: torch says "supported" on T4/RTX 20 via a slow software path
+        return torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
     return torch.float32 if device == "cpu" else torch.float16
 
 
@@ -157,10 +158,10 @@ class Engine:
         device = device or default_device()
         torch_dtype = getattr(torch, dtype) if dtype else default_dtype(device)
         self.tok = AutoTokenizer.from_pretrained(model_id)
-        # "auto" splits the model across every visible GPU (needs accelerate, in the [4bit] extra)
+        # "auto" splits the model across every visible GPU (needs accelerate, a core dependency)
         device_map = "auto" if device == "auto" else {"": device}
         q = None
-        if load_in_4bit:  # needs the [4bit] extra (bitsandbytes + accelerate) and a CUDA GPU
+        if load_in_4bit:  # needs bitsandbytes (a core dependency off macOS) and an NVIDIA GPU
             from transformers import BitsAndBytesConfig
 
             q = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch_dtype)
