@@ -4,7 +4,7 @@ import argparse
 import os
 import sys
 
-DEFAULT_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+DEFAULT_MODEL = "auto"  # biggest model the GPU fits, see hardware.py
 
 
 def _positive(v: str) -> float:
@@ -19,12 +19,15 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("serve", help="serve POST /v1/systemone and GET /v1/models")
     s.add_argument("--model", default=os.environ.get("QUICKVERDICT_MODEL", DEFAULT_MODEL),
-                   help="Hugging Face model id or local path (env QUICKVERDICT_MODEL); with --api-base, "
-                        "the backend's own model name")
+                   help="Hugging Face model id or local path, or auto (default): the biggest model your GPU fits "
+                        "(env QUICKVERDICT_MODEL); with --api-base, the backend's own model name")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
-    s.add_argument("--device", default=None, help="cuda, cpu, ... (default: cuda if available)")
-    s.add_argument("--dtype", default=None, help="float16, bfloat16, float32 (default: float16 on GPU)")
+    s.add_argument("--device", default=None, help="cuda, xpu, mps, cpu, or auto to split the model across all GPUs "
+                                                         "(default: the first of cuda/xpu/mps found, else cpu)")
+    s.add_argument("--dtype", default=None,
+                   help="float16, bfloat16, float32 (default: bfloat16 on GPUs that have it, else float16; "
+                        "float32 on CPU)")
     s.add_argument("--permutations", type=int, default=3,
                    help="option orderings averaged per Choice to cancel order bias (1 = off)")
     s.add_argument("--temperature", type=_positive, default=1.0, help="calibration temperature")
@@ -51,6 +54,10 @@ def main(argv=None):
 
         from .remote import RemoteEngine
 
+        if a.model == "auto":  # a backend can't be sized from here; keep the old default name
+            from .hardware import SMALLEST
+
+            a.model = SMALLEST
         try:
             engine = RemoteEngine(a.api_base, a.model, api_key=os.environ.get("QUICKVERDICT_BACKEND_API_KEY"),
                                   permutations=a.permutations, temperature=a.temperature,
@@ -67,6 +74,12 @@ def main(argv=None):
     else:
         from .engine import Engine
 
+        if a.model == "auto":
+            from .hardware import auto_model
+
+            a.model, a.device, nf4, why = auto_model(a.device)
+            a.load_in_4bit = a.load_in_4bit or nf4
+            print(why, file=sys.stderr)
         engine = Engine(a.model, device=a.device, dtype=a.dtype, permutations=a.permutations,
                         temperature=a.temperature, chunk_tokens=a.chunk_tokens, load_in_4bit=a.load_in_4bit,
                         compile=a.compile)

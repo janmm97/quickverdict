@@ -9,6 +9,23 @@ All notable changes to this project are documented here. The format follows
 - Remote backend (`--api-base`): score with any OpenAI-compatible server that returns logprobs
   (vLLM, llama.cpp, Ollama, SGLang, LM Studio, hosted open-model providers), so bigger models on
   another machine can serve the same API. Opt-in; key via `QUICKVERDICT_BACKEND_API_KEY`.
+- `--model auto` (the new default): reads the GPU's memory at start-up and loads the biggest Qwen2.5
+  model that fits (1.5B, 7B, 14B or 32B; 4-bit on NVIDIA), so bigger cards get a better judge. Several
+  GPUs are pooled. The benchmark scripts use it too.
+- Auto device detection beyond NVIDIA: Intel Arc (`xpu`) and Apple Silicon (`mps`); AMD works through
+  ROCm builds of torch. `--device auto` splits a big model across every GPU.
+- README: install lines for RTX 50-series, AMD, Apple and Intel, and rough model sizes per card.
+
+### Changed
+- Default dtype on NVIDIA/AMD GPUs is now bf16 where supported (fp16 otherwise), because newer models
+  overflow in fp16.
+- Requires `torch>=2.7`; the README installs the `cu128` wheel.
+- `bitsandbytes` and `accelerate` are now regular dependencies (no `[4bit]` extra needed; it stays as an
+  empty alias).
+
+### Fixed
+- RTX 50-series (Blackwell) GPUs failed with "no kernel image is available" because the README installed
+  the `cu124` torch wheel.
 
 ## [0.1.0] - 2026-11-19
 

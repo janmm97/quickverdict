@@ -17,8 +17,8 @@ more than top accuracy, or when you can run a larger model.
 ## Requirements
 
 - Python 3.10+
-- An NVIDIA GPU is recommended (measured on an RTX 3050 Laptop, 4 GB). CPU works, slowly.
-- About 3.5 GB of VRAM for the default model (`Qwen/Qwen2.5-1.5B-Instruct`, fp16), or less with `--load-in-4bit`.
+- A GPU is recommended: NVIDIA (RTX 20 to 50-series), AMD (ROCm), Apple Silicon or Intel Arc. Measured on an RTX 3050 Laptop, 4 GB. CPU works, slowly.
+- Any VRAM: quickverdict checks your GPU at start-up and loads the biggest model that fits (see "Your GPU picks the model"). A 4 GB card runs `Qwen/Qwen2.5-1.5B-Instruct`.
 
 ## Quick start
 
@@ -26,12 +26,44 @@ more than top accuracy, or when you can run a larger model.
 git clone https://github.com/janmm97/quickverdict
 cd quickverdict
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # or the CPU wheel
+pip install torch --index-url https://download.pytorch.org/whl/cu128   # NVIDIA, incl. RTX 50-series; see "Other GPUs"
 pip install -e .
 quickverdict serve                                 # http://127.0.0.1:8000
 ```
 
 The first start downloads the model from Hugging Face.
+
+### Other GPUs
+
+| GPU | Install torch with | Notes |
+|---|---|---|
+| NVIDIA RTX 20/30/40/**50** | `--index-url https://download.pytorch.org/whl/cu128` | RTX 50-series (Blackwell) needs torch 2.7+ with CUDA 12.8; older `cu124` wheels fail with "no kernel image is available" |
+| AMD Radeon (Linux) | `--index-url https://download.pytorch.org/whl/rocm6.3` | ROCm reports the GPU as `cuda`, so nothing else changes. `--load-in-4bit` support is limited |
+| Apple Silicon | plain `pip install torch` | Uses `mps` automatically |
+| Intel Arc | `--index-url https://download.pytorch.org/whl/xpu` | Uses `xpu` automatically |
+| CPU only | `--index-url https://download.pytorch.org/whl/cpu` | Works, slowly |
+
+Several GPUs are pooled automatically: their memory is added up and the model is split across them.
+
+### Your GPU picks the model
+
+With the default `--model auto`, quickverdict reads your GPU's memory at start-up, prints what it chose
+(for example `auto: NVIDIA GeForce RTX 5090 (32 GiB), using Qwen/Qwen2.5-32B-Instruct in 4-bit`) and loads
+the biggest model that fits. A bigger model judges better, so a bigger card gives better answers with no
+extra setup.
+
+| GPU memory (all cards together) | Example cards | Model it loads |
+|---|---|---|
+| under 7 GB, or CPU | RTX 3050/4050 Laptop, RTX 2060 | Qwen2.5-1.5B (bf16) |
+| 7–11 GB | RTX 3060 Ti, 4060, 5060, 3080 10 GB | Qwen2.5-7B (4-bit) |
+| 12–21 GB | RTX 3060 12 GB, 4070, 4080, 5070 Ti, 5080 | Qwen2.5-14B (4-bit) |
+| 22–71 GB | RTX 3090, 4090, **5090**, two 16 GB cards | Qwen2.5-32B (4-bit) |
+| 72 GB and up | A100/H100 80 GB, several big cards | Qwen2.5-32B (bf16) |
+
+4-bit loading needs an NVIDIA GPU. On AMD, Apple Silicon and Intel the same table applies with bf16
+models only (e.g. 7B from 17 GB, 14B from 33 GB, 32B from 72 GB). Pass `--model <id>` to choose
+yourself. The accuracy of the larger models against Jev has not been measured yet: the numbers under
+"Benchmarks" are for the 1.5B model on a 4 GB card.
 
 ## Usage
 
@@ -104,14 +136,14 @@ Limits of the remote backend:
 
 | Flag / env var | Default | What it does |
 |---|---|---|
-| `--model` / `QUICKVERDICT_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | Hugging Face model id or local path |
+| `--model` / `QUICKVERDICT_MODEL` | `auto` | `auto` loads the biggest model your GPU fits; or a Hugging Face model id or local path |
 | `QUICKVERDICT_API_KEY` | empty | If set, requests must send `Authorization: Bearer <key>` |
 | `--host`, `--port` | `127.0.0.1`, `8000` | Where to listen. Keep it on localhost unless you set an API key |
-| `--device`, `--dtype` | `cuda` if available, fp16 on GPU | Where and how to run the model |
+| `--device`, `--dtype` | first of `cuda`/`xpu`/`mps` found, else `cpu`; bf16 on GPUs that have it, else fp16 | Where and how to run the model. `--device auto` splits the model across all GPUs |
 | `--permutations` | `3` | Option orderings averaged per Choice (1 = off) |
 | `--temperature` | `1.0` | Calibration temperature (must be > 0) |
 | `--chunk-tokens` | `2048` | Max new tokens per forward pass. Lower it if a long state runs out of GPU memory |
-| `--load-in-4bit` | off | nf4 weights, about 4x less VRAM (`pip install -e ".[4bit]"`) |
+| `--load-in-4bit` | off (`--model auto` turns it on when needed) | nf4 weights, about 4x less VRAM (NVIDIA only) |
 | `--compile` | off | `torch.compile`: faster calls, slow first request |
 | `--api-base` / `QUICKVERDICT_API_BASE` | empty | Score with an OpenAI-compatible server instead of a local model; `--model` is then its model name |
 | `QUICKVERDICT_BACKEND_API_KEY` | empty | Bearer key sent to `--api-base` |
@@ -175,8 +207,8 @@ Reproduce:
 
 ```bash
 pip install -e ".[bench]"
-python bench/clerc_rerank.py --model Qwen/Qwen2.5-1.5B-Instruct --out clerc.json
-python bench/consistency.py  --model Qwen/Qwen2.5-1.5B-Instruct --out consistency.json
+python bench/clerc_rerank.py --out clerc.json   # --model auto by default: your GPU's model
+python bench/consistency.py  --out consistency.json
 ```
 
 Please include your GPU and model when you share results.

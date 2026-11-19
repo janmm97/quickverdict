@@ -5,13 +5,14 @@ Recipe (docs.typesafe.ai/cookbooks/rerank_typesafe): 170 CLERC rows pooled into 
 Published Jev numbers on this slice: top-1/5/10 = 30/57/65 %; BM25 alone: 5/15/38 %.
 
     pip install -e ".[bench]"
-    python bench/clerc_rerank.py --model Qwen/Qwen2.5-1.5B-Instruct
+    python bench/clerc_rerank.py              # picks the biggest model your GPU fits
 """
 
 import argparse
 import hashlib
 import json
 import random
+import sys
 import time
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def hits(ranked: dict, golds: dict, n: int) -> float:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
+    ap.add_argument("--model", default="auto", help="model id, or auto: the biggest one your GPU fits")
     ap.add_argument("--dtype", default=None)
     ap.add_argument("--load-in-4bit", action="store_true")
     ap.add_argument("--cache", default="bench/.cache/clerc_slice.json", help="where the data slice is kept")
@@ -108,7 +109,14 @@ def main():
     from quickverdict.engine import Engine
     from quickverdict.schema import SystemOneRequest
 
-    engine = Engine(args.model, dtype=args.dtype, load_in_4bit=args.load_in_4bit)
+    device = None
+    if args.model == "auto":
+        from quickverdict.hardware import auto_model
+
+        args.model, device, nf4, why = auto_model()
+        args.load_in_4bit = args.load_in_4bit or nf4
+        print(why, file=sys.stderr)
+    engine = Engine(args.model, device=device, dtype=args.dtype, load_in_4bit=args.load_in_4bit)
     qs = SystemOneRequest.model_validate({"model": "m", "state": "", "questions": {"q": QUESTION}}).questions
     scores, times = {}, []
     for q in queries:
@@ -116,14 +124,14 @@ def main():
         for c in cands[q]:
             t = time.perf_counter()
             out = engine.system_one({"query_excerpt": queries[q], "candidate_passage": corpus[c]}, qs)
-            if engine.device == "cuda":
+            if engine.device.startswith("cuda"):
                 torch.cuda.synchronize()
             times.append(time.perf_counter() - t)
             scores[q][c] = out["answers"]["q"]["noul"]
     reranked = {q: sorted(cands[q], key=lambda c: -scores[q][c]) for q in queries}
 
     times.sort()
-    gpu = torch.cuda.get_device_name() if engine.device == "cuda" else "cpu"
+    gpu = torch.cuda.get_device_name() if engine.device.startswith("cuda") else "cpu"
     summary = {
         "model": args.model + (" (nf4)" if args.load_in_4bit else ""), "hardware": gpu, "calls": len(times),
         "median_ms": round(1000 * times[len(times) // 2], 1), "p90_ms": round(1000 * times[int(len(times) * 0.9)], 1),

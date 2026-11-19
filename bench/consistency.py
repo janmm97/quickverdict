@@ -6,7 +6,7 @@ draw from 128 combinations), 8 Choice questions (37 options), each post sent 15 
 Each post scores its least stable option. Published Jev 1.14: 1.0% over all options, 4.0% average post,
 6.7% worst post, 0/40 posts above 1 in 10; ~103 ms per call.
 
-    python bench/consistency.py --model Qwen/Qwen2.5-1.5B-Instruct
+    python bench/consistency.py              # picks the biggest model your GPU fits
 """
 
 import argparse
@@ -14,6 +14,7 @@ import copy
 import itertools
 import json
 import random
+import sys
 import time
 from statistics import mean
 
@@ -123,7 +124,7 @@ def change_chances(samples: list[dict]) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="Qwen/Qwen2.5-1.5B-Instruct")
+    ap.add_argument("--model", default="auto", help="model id, or auto: the biggest one your GPU fits")
     ap.add_argument("--dtype", default=None)
     ap.add_argument("--load-in-4bit", action="store_true")
     ap.add_argument("--compile", action="store_true")
@@ -135,11 +136,18 @@ def main():
     from quickverdict.engine import Engine
     from quickverdict.schema import SystemOneRequest
 
-    engine = Engine(args.model, dtype=args.dtype, load_in_4bit=args.load_in_4bit, compile=args.compile)
+    device = None
+    if args.model == "auto":
+        from quickverdict.hardware import auto_model
+
+        args.model, device, nf4, why = auto_model()
+        args.load_in_4bit = args.load_in_4bit or nf4
+        print(why, file=sys.stderr)
+    engine = Engine(args.model, device=device, dtype=args.dtype, load_in_4bit=args.load_in_4bit, compile=args.compile)
     qs = SystemOneRequest.model_validate({"model": "m", "state": "", "questions": {
         k: {"type": "choice", "instructions": ins, "criteria": opts} for k, (ins, opts) in QUESTIONS.items()
     }}).questions
-    sync = torch.cuda.synchronize if engine.device == "cuda" else (lambda: None)
+    sync = torch.cuda.synchronize if engine.device.startswith("cuda") else (lambda: None)
     all_posts = posts()
     engine.system_one(next(iter(all_posts.values())), qs)  # warm-up (and compile), not timed
 
@@ -160,7 +168,7 @@ def main():
     times.sort()
     summary = {
         "model": args.model + (" (nf4)" if args.load_in_4bit else "") + (" +compile" if args.compile else ""),
-        "hardware": torch.cuda.get_device_name() if engine.device == "cuda" else "cpu",
+        "hardware": torch.cuda.get_device_name() if engine.device.startswith("cuda") else "cpu",
         "calls": len(times), "posts": NUM_POSTS, "repeats": NUM_SAMPLES,
         "median_ms": round(1000 * times[len(times) // 2], 1), "p90_ms": round(1000 * times[int(len(times) * 0.9)], 1),
         "avg_all_options": mean(avg), "least_stable_avg_post": mean(least), "least_stable_worst_post": max(least),

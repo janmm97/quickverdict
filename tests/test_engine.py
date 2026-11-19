@@ -103,3 +103,35 @@ def test_box_and_long_rejected(engine):
             engine.system_one(r.state, r.questions)
     finally:
         engine.max_len = old
+
+
+def test_default_device_and_dtype():
+    import torch
+
+    from quickverdict.engine import default_device, default_dtype
+
+    assert default_device() in ("cuda", "xpu", "mps", "cpu")
+    assert default_dtype("cpu") == torch.float32
+    assert default_dtype("mps") == torch.float16
+    want = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+    if torch.cuda.is_available():
+        assert default_dtype("cuda:0") == want
+
+
+def test_pick_model_scales_with_vram():
+    from quickverdict.hardware import SMALLEST, pick_model
+
+    assert pick_model(4, True) == (SMALLEST, False)  # RTX 3050 Laptop
+    assert pick_model(8, True) == ("Qwen/Qwen2.5-7B-Instruct", True)
+    assert pick_model(12, True) == ("Qwen/Qwen2.5-14B-Instruct", True)
+    assert pick_model(24, True) == ("Qwen/Qwen2.5-32B-Instruct", True)
+    assert pick_model(31.8, True) == ("Qwen/Qwen2.5-32B-Instruct", True)  # RTX 5090
+    assert pick_model(80, True) == ("Qwen/Qwen2.5-32B-Instruct", False)
+    assert pick_model(24, False) == ("Qwen/Qwen2.5-7B-Instruct", False)  # no bitsandbytes (AMD, Apple, Intel)
+    assert pick_model(8, False) == (SMALLEST, False)
+
+
+def test_auto_model_on_cpu():
+    from quickverdict.hardware import SMALLEST, auto_model
+
+    assert auto_model("cpu")[:3] == (SMALLEST, "cpu", False)
