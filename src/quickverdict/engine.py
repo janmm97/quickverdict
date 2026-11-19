@@ -131,22 +131,46 @@ def aggregate(questions: dict, items: list, scores: list[list[float]], temperatu
     return answers
 
 
+def default_device() -> str:
+    """cuda (NVIDIA, and AMD via ROCm builds), then Intel xpu, then Apple mps, else cpu."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def default_dtype(device: str) -> torch.dtype:
+    """bf16 where the GPU has it (newer models overflow in fp16), else fp16 on GPUs, fp32 on CPU."""
+    if device.startswith("cuda") or device == "auto":
+        # no emulation: torch says "supported" on T4/RTX 20 via a slow software path
+        return torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
+    return torch.float32 if device == "cpu" else torch.float16
+
+
 class Engine:
     def __init__(self, model_id: str, device: str | None = None, dtype: str | None = None,
                  permutations: int = 3, temperature: float = 1.0, chunk_tokens: int = 2048,
                  load_in_4bit: bool = False, compile: bool = False):
         self.model_id = model_id
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        torch_dtype = getattr(torch, dtype) if dtype else (torch.float16 if self.device == "cuda" else torch.float32)
+        device = device or default_device()
+        torch_dtype = getattr(torch, dtype) if dtype else default_dtype(device)
         self.tok = AutoTokenizer.from_pretrained(model_id)
-        if load_in_4bit:  # needs the [4bit] extra (bitsandbytes + accelerate) and a CUDA GPU
+        # "auto" splits the model across every visible GPU (needs accelerate, a core dependency)
+        device_map = "auto" if device == "auto" else {"": device}
+        q = None
+        if load_in_4bit:  # needs bitsandbytes (a core dependency off macOS) and an NVIDIA GPU
             from transformers import BitsAndBytesConfig
 
             q = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch_dtype)
+        if q or device == "auto":
             model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch_dtype, quantization_config=q,
-                                                         device_map={"": self.device}).eval()
+                                                         device_map=device_map).eval()
         else:
-            model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch_dtype).to(self.device).eval()
+            model = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch_dtype).to(device).eval()
+        self.device = str(model.get_input_embeddings().weight.device)  # where inputs go ("cuda:0" with auto)
         self.body, self.head = model.get_decoder(), model.get_output_embeddings()
         if compile:  # cuts kernel-launch overhead; first request pays a one-off compile (~2 min on a laptop)
             self.body = torch.compile(self.body, dynamic=True)
@@ -228,9 +252,9 @@ class Engine:
                 owners.append((k, ci))
         out = []
         for s in range(0, len(rows), 256):  # cap the vocab-sized logits tensor
-            r = torch.tensor(rows[s:s + 256], device=self.device)
-            t = torch.tensor(ids[s:s + 256], device=self.device)
-            lp = self.head(h[r]).float().log_softmax(-1).gather(1, t[:, None])[:, 0]
+            x = self.head(h[torch.tensor(rows[s:s + 256], device=h.device)]).float().log_softmax(-1)
+            t = torch.tensor(ids[s:s + 256], device=x.device)  # with --device auto the head can sit on another GPU
+            lp = x.gather(1, t[:, None])[:, 0]
             out += lp.tolist()
         return [(k, ci, v) for (k, ci), v in zip(owners, out)]
 

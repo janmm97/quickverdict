@@ -103,3 +103,101 @@ def test_box_and_long_rejected(engine):
             engine.system_one(r.state, r.questions)
     finally:
         engine.max_len = old
+
+
+def test_default_device_and_dtype():
+    import torch
+
+    from quickverdict.engine import default_device, default_dtype
+
+    assert default_device() in ("cuda", "xpu", "mps", "cpu")
+    assert default_dtype("cpu") == torch.float32
+    assert default_dtype("mps") == torch.float16
+    want = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False) \
+        else torch.float16
+    if torch.cuda.is_available():
+        assert default_dtype("cuda:0") == want
+
+
+def test_pick_model_scales_with_vram():
+    from quickverdict.hardware import SMALLEST, pick_model
+
+    assert pick_model(4, True) == (SMALLEST, False)  # RTX 3050 Laptop
+    assert pick_model(8, True) == ("Qwen/Qwen2.5-7B-Instruct", True)
+    assert pick_model(12, True) == ("Qwen/Qwen2.5-14B-Instruct", True)
+    assert pick_model(24, True) == ("Qwen/Qwen2.5-32B-Instruct", True)
+    assert pick_model(31.8, True) == ("Qwen/Qwen2.5-32B-Instruct", True)  # RTX 5090
+    assert pick_model(80, True) == ("Qwen/Qwen2.5-32B-Instruct", False)
+    assert pick_model(24, False) == ("Qwen/Qwen2.5-7B-Instruct", False)  # no bitsandbytes (AMD, Apple, Intel)
+    assert pick_model(8, False) == (SMALLEST, False)
+
+
+def test_auto_model_on_cpu():
+    from quickverdict.hardware import SMALLEST, auto_model
+
+    assert auto_model("cpu")[:3] == (SMALLEST, "cpu", False)
+
+
+def test_default_dtype_skips_emulated_bf16(monkeypatch):
+    import torch
+
+    from quickverdict.engine import default_dtype
+
+    seen = {}
+
+    def fake(including_emulation=True):
+        seen["emulation"] = including_emulation
+        return including_emulation  # a T4: bf16 only through emulation
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", fake)
+    assert default_dtype("cuda") == torch.float16 and seen["emulation"] is False
+
+
+def _gpus(monkeypatch, *gibs):
+    """Pretend this machine has CUDA GPUs with the given memory."""
+    import types
+
+    import torch
+
+    from quickverdict import hardware
+
+    props = [types.SimpleNamespace(name=f"GPU{i}", total_memory=int(g * hardware.GIB)) for i, g in enumerate(gibs)]
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: len(props))
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda i: props[i if isinstance(i, int) else 0])
+
+
+def test_detect_pools_cuda_gpus(monkeypatch):
+    from quickverdict.hardware import detect
+
+    _gpus(monkeypatch, 12, 12)
+    assert detect() == ("auto", 24.0, "GPU0 + GPU1")
+    assert detect("auto")[0] == "auto"
+    assert detect("cuda:1")[:2] == ("cuda:1", 12.0)  # an explicit device is never pooled
+    _gpus(monkeypatch, 8)
+    assert detect("auto") == ("cuda", 8.0, "GPU0")  # one GPU: plain cuda
+
+
+def test_detect_without_gpu(monkeypatch):
+    import torch
+
+    from quickverdict.hardware import detect
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(torch, "xpu", type("X", (), {"is_available": staticmethod(lambda: False)}), raising=False)
+    assert detect() == ("cpu", 0.0, "cpu")
+    assert detect("cuda")[1] == 0.0  # asked for a GPU we cannot see: smallest model, the load then fails loudly
+
+
+def test_can_load_4bit_only_on_nvidia(monkeypatch):
+    import torch
+
+    from quickverdict import hardware
+
+    monkeypatch.setattr(torch.version, "hip", None)
+    monkeypatch.setattr(hardware.importlib.util, "find_spec", lambda name: object())  # macOS has no bitsandbytes
+    assert hardware.can_load_4bit("cuda") and hardware.can_load_4bit("cuda:1") and hardware.can_load_4bit("auto")
+    assert not hardware.can_load_4bit("mps") and not hardware.can_load_4bit("xpu")
+    monkeypatch.setattr(torch.version, "hip", "6.3")  # ROCm builds report device "cuda" too
+    assert not hardware.can_load_4bit("cuda")
