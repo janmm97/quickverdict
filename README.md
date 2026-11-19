@@ -43,7 +43,9 @@ The first start downloads the model from Hugging Face.
 | Intel Arc | `--index-url https://download.pytorch.org/whl/xpu` | Uses `xpu` automatically |
 | CPU only | `--index-url https://download.pytorch.org/whl/cpu` | Works, slowly |
 
-Several GPUs are pooled automatically: their memory is added up and the model is split across them.
+With `--model auto`, several GPUs are pooled automatically: their memory is added up and the model is split
+across them (untested with 4-bit). With an explicit `--model`, only the first GPU is used unless you pass `--device auto`.
+The first run downloads the model (about 3 GB for 1.5B, 15 GB for 7B, 30 GB for 14B, 66 GB for 32B) and prints the size.
 
 ### Your GPU picks the model
 
@@ -57,7 +59,7 @@ extra setup.
 | under 7 GB, or CPU | RTX 3050/4050 Laptop, RTX 2060 | Qwen2.5-1.5B (bf16) |
 | 7–11 GB | RTX 3060 Ti, 4060, 5060, 3080 10 GB | Qwen2.5-7B (4-bit) |
 | 12–21 GB | RTX 3060 12 GB, 4070, 4080, 5070 Ti, 5080 | Qwen2.5-14B (4-bit) |
-| 22–71 GB | RTX 3090, 4090, **5090**, two 16 GB cards | Qwen2.5-32B (4-bit) |
+| 23–71 GB | RTX 3090, 4090, **5090**, two 16 GB cards | Qwen2.5-32B (4-bit) |
 | 72 GB and up | A100/H100 80 GB, several big cards | Qwen2.5-32B (bf16) |
 
 4-bit loading needs an NVIDIA GPU. On AMD, Apple Silicon and Intel the same table applies with bf16
@@ -139,7 +141,7 @@ Limits of the remote backend:
 | `--model` / `QUICKVERDICT_MODEL` | `auto` | `auto` loads the biggest model your GPU fits; or a Hugging Face model id or local path |
 | `QUICKVERDICT_API_KEY` | empty | If set, requests must send `Authorization: Bearer <key>` |
 | `--host`, `--port` | `127.0.0.1`, `8000` | Where to listen. Keep it on localhost unless you set an API key |
-| `--device`, `--dtype` | first of `cuda`/`xpu`/`mps` found, else `cpu`; bf16 on GPUs that have it, else fp16 | Where and how to run the model. `--device auto` splits the model across all GPUs |
+| `--device`, `--dtype` | first of `cuda`/`xpu`/`mps` found, else `cpu` (with `--model auto`, all CUDA GPUs together); bf16 on NVIDIA GPUs with native bf16 (RTX 30-series and newer), else fp16 | Where and how to run the model. `--device auto` splits the model across all GPUs |
 | `--permutations` | `3` | Option orderings averaged per Choice (1 = off) |
 | `--temperature` | `1.0` | Calibration temperature (must be > 0) |
 | `--chunk-tokens` | `2048` | Max new tokens per forward pass. Lower it if a long state runs out of GPU memory |
