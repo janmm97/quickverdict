@@ -196,6 +196,7 @@ def test_can_load_4bit_only_on_nvidia(monkeypatch):
     from quickverdict import hardware
 
     monkeypatch.setattr(torch.version, "hip", None)
+    monkeypatch.setattr(hardware.importlib.util, "find_spec", lambda name: object())  # macOS has no bitsandbytes
     assert hardware.can_load_4bit("cuda") and hardware.can_load_4bit("cuda:1") and hardware.can_load_4bit("auto")
     assert not hardware.can_load_4bit("mps") and not hardware.can_load_4bit("xpu")
     monkeypatch.setattr(torch.version, "hip", "6.3")  # ROCm builds report device "cuda" too
