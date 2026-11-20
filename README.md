@@ -1,4 +1,4 @@
-# quickverdict
+# QuickVerdict
 
 [![CI](https://github.com/janmm97/quickverdict/actions/workflows/ci.yml/badge.svg)](https://github.com/janmm97/quickverdict/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB)
 
